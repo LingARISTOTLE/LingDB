@@ -19,7 +19,7 @@ func NewFileIOManager(fileName string) (*FileIO, error) {
 	return &FileIO{fd: file}, nil
 }
 
-// Read 从文件的给定位置读取对应的数据
+// Read 从文件的给定位置读取对应的数据z
 func (fio *FileIO) Read(b []byte, offset int64) (int, error) {
 	return fio.fd.ReadAt(b, offset)
 }
