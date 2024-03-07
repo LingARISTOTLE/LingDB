@@ -85,6 +85,38 @@ func (db *DB) Put(key []byte, value []byte) error {
 	return nil
 }
 
+// Delete 删除操作
+// 如果内存中没有key，那么就不需要追加日志，如果有，那么就向磁盘中追加日志，然后删除内存中的key
+func (db *DB) Delete(key []byte) error {
+	//判断key的有效性
+	if len(key) == 0 {
+		return ErrKeyIsEmpty
+	}
+
+	//先检查key在索引里是否存在，如果不存在的话直接返回
+	if pos := db.index.Get(key); pos != nil {
+		return nil
+	}
+
+	//构造LogRecord记录对象，标记该记录是被删除的
+	logRecord := &data.LogRecord{
+		Key:  key,
+		Type: data.LogRecordDeleted,
+	}
+	//将删除操作追加到数据文件中
+	_, err := db.appendLogRecord(logRecord)
+	if err != nil {
+		return nil
+	}
+
+	//删除内存中对应的key
+	ok := db.index.Delete(key)
+	if !ok {
+		return ErrIndexUpdateFailed
+	}
+	return nil
+}
+
 // Get 获取数据
 func (db *DB) Get(key []byte) ([]byte, error) {
 	db.mu.Lock()
@@ -289,10 +321,14 @@ func (db *DB) loadIndexFromDataFiles() error {
 				Offset: offset,
 			}
 			//因为按照文件id顺序遍历的，所以如果后续有追加了delete的record，那么需要删除这个索引中的kv
+			var ok bool
 			if logRecord.Type == data.LogRecordDeleted {
-				db.index.Delete(logRecord.Key)
+				ok = db.index.Delete(logRecord.Key)
 			} else {
-				db.index.Put(logRecord.Key, logRecordPos)
+				ok = db.index.Put(logRecord.Key, logRecordPos)
+			}
+			if !ok {
+				return ErrIndexUpdateFailed
 			}
 
 			//底座offset，下一次读取下一个Record
