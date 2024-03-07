@@ -3,6 +3,12 @@ package LingDB_go
 import (
 	"LingDB/LingDB-go/data"
 	"LingDB/LingDB-go/index"
+	"errors"
+	"io"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -10,9 +16,45 @@ import (
 type DB struct {
 	options    Options                   //用户配置项
 	mu         *sync.RWMutex             //操作db需要加锁
+	fileIds    []int                     //文件的id，只能用在加载索引时使用，不能修改这个属性的值和内部指针
 	activeFile *data.DataFile            //当前活跃数据文件，可以用于写入
 	olderFiles map[uint32]*data.DataFile //旧的数据文件，只能用于读
 	index      index.Indexer             //内存索引
+}
+
+// Open 打开db存储引擎实例
+func Open(options Options) (*DB, error) {
+	//对用户传入配置项进行校验
+	if err := checkOptions(options); err != nil {
+		return nil, err
+	}
+
+	//校验目录是否存在，如果不存在则创建
+	if _, err := os.Stat(options.DirPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(options.DirPath, os.ModePerm); err != nil {
+			return nil, err
+		}
+	}
+
+	//初始化DB实例结构体
+	db := &DB{
+		options:    options,
+		mu:         new(sync.RWMutex),
+		olderFiles: make(map[uint32]*data.DataFile),
+		index:      index.NewIndexer(index.IndexType(options.IndexType)),
+	}
+
+	//加载数据文件内容
+	if err := db.loadDataFiles(); err != nil {
+		return nil, err
+	}
+
+	//从数据文件中加载索引
+	if err := db.loadIndexFromDataFiles(); err != nil {
+		return nil, err
+	}
+
+	return db, nil
 }
 
 // Put 写入KV数据，key不能为nil
@@ -73,8 +115,8 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		return nil, ErrDataFileNotFound
 	}
 
-	//根据当前的文件id以及偏移量寻找文件数据据
-	logRecord, err := dataFile.ReadLogRecord(logRecordPos.Offset)
+	//根据当前的文件id以及偏移量寻找文件数据
+	logRecord, _, err := dataFile.ReadLogRecord(logRecordPos.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +168,7 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 	}
 
 	//执行数据写入操作
+	//记录当前记录的开始位置，用作索引的value中的文件偏移量指针
 	writeOff := db.activeFile.WriteOff
 	if err := db.activeFile.Write(encRecord); err != nil {
 		return nil, err
@@ -161,5 +204,117 @@ func (db *DB) setActiveDataFile() error {
 		return err
 	}
 	db.activeFile = dataFile
+	return nil
+}
+
+// 加载数据文件，db的activeFile以及olderFiles
+func (db *DB) loadDataFiles() error {
+	//根据配置项读取目录
+	dirEntries, err := os.ReadDir(db.options.DirPath)
+	if err != nil {
+		return err
+	}
+
+	//文件id
+	var fileIds []int
+	//遍历目录中的所有文件，如果以.data结尾，那就是数据文件
+	for _, entry := range dirEntries {
+		if strings.HasSuffix(entry.Name(), data.DataFileNameSuffix) {
+			splitNames := strings.Split(entry.Name(), ".")
+			fileId, err := strconv.Atoi(splitNames[0])
+			//如果数据目录被外部篡改
+			if err != nil {
+				return ErrDataDirectoryCorrupted
+			}
+			fileIds = append(fileIds, fileId)
+		}
+	}
+
+	//对文件id进行排序，因为我们写入文件是从0开始的
+	//后续文件可能会删除前面文件的记录，所以必须按照顺序读取
+	sort.Ints(fileIds)
+	db.fileIds = fileIds
+	//遍历文件
+	for i, fid := range fileIds {
+		dataFile, err := data.OpenDataFile(db.options.DirPath, uint32(fid))
+		if err != nil {
+			return err
+		}
+
+		//如果是最后一个文件，那么就是活跃文件
+		if i == len(fileIds) {
+			db.activeFile = dataFile
+		} else { //如果不是那都是旧文件
+			db.olderFiles[uint32(fid)] = dataFile
+		}
+	}
+
+	return nil
+}
+
+// 从数据文件中加载索引
+// 遍历所有文件中的数据，并且更新到内存索引中
+func (db *DB) loadIndexFromDataFiles() error {
+	//如果是0，那么是空的数据库，直接返回
+	if len(db.fileIds) == 0 {
+		return nil
+	}
+
+	//遍历所有文件id，处理文件数据
+	for i, fid := range db.fileIds {
+		var fileId = uint32(fid)
+		var dataFile *data.DataFile
+		//判断是否是活跃文件
+		if fileId == db.activeFile.FileId {
+			dataFile = db.activeFile
+		} else {
+			dataFile = db.olderFiles[fileId]
+		}
+
+		//循环处理每一行Record
+		var offset int64 = 0
+		for {
+			logRecord, size, err := dataFile.ReadLogRecord(offset)
+			if err != nil {
+				//如果是io问题，那么退出循环
+				if err == io.EOF {
+					break
+				}
+				return err
+			}
+
+			//构造内存索引并保存
+			logRecordPos := &data.LogRecordPos{
+				Fid:    fileId,
+				Offset: offset,
+			}
+			//因为按照文件id顺序遍历的，所以如果后续有追加了delete的record，那么需要删除这个索引中的kv
+			if logRecord.Type == data.LogRecordDeleted {
+				db.index.Delete(logRecord.Key)
+			} else {
+				db.index.Put(logRecord.Key, logRecordPos)
+			}
+
+			//底座offset，下一次读取下一个Record
+			offset += size
+		}
+
+		//该文件读取完毕
+		//如果这个文件是当前活跃文件，那么需要记录当前文件写入指针（写入偏移量），方便put追加
+		if i == len(db.fileIds)-1 {
+			db.activeFile.WriteOff = offset
+		}
+	}
+
+	return nil
+}
+
+func checkOptions(options Options) error {
+	if options.DirPath == "" {
+		return errors.New("database dir path is empty")
+	}
+	if options.DataFileSize <= 0 {
+		return errors.New("database data file size must to be greater than 0")
+	}
 	return nil
 }

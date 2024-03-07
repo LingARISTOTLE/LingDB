@@ -18,6 +18,28 @@ type Indexer interface {
 	Delete(key []byte) bool
 }
 
+type IndexType = int8
+
+const (
+	// BTREE B树索引
+	BTREE IndexType = iota + 1
+
+	// ART 自适应基数树索引
+	ART
+)
+
+func NewIndexer(typ IndexType) Indexer {
+	switch typ {
+	case BTREE:
+		return NewBTree()
+	case ART:
+		// todo:自适应基数树索引待实现
+		return nil
+	default:
+		panic("unsupported index type")
+	}
+}
+
 // Item google btree的树节点接口，为了保证节点的插入有序性，需要用户自己去是实现Less方法
 type Item struct {
 	key []byte
