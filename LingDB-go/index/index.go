@@ -16,6 +16,12 @@ type Indexer interface {
 
 	//Delete 根据key来删除节点
 	Delete(key []byte) bool
+
+	// Size 获取索引中的数据量
+	Size() int
+
+	// Iterator 索引迭代器
+	Iterator(reverse bool) Iterator
 }
 
 type IndexType = int8
@@ -49,4 +55,27 @@ type Item struct {
 // Less 比较规则就按照key的比特顺序进行排序
 func (ai *Item) Less(bi btree.Item) bool {
 	return bytes.Compare(ai.key, bi.(*Item).key) == -1
+}
+
+type Iterator interface {
+	// Rewind 重新回到迭代器起点，也就是第一个数据
+	Rewind()
+
+	// Seek 根据传入的key查找到第一个大于(或者小于)该key的目标key，根据这个key开始遍历
+	Seek(key []byte)
+
+	// Next 跳转到下一个key
+	Next()
+
+	// Valid 是否有效，即是否已经遍历完了所有的 key，用于退出遍历
+	Valid() bool
+
+	// Key 当前遍历位置的Value数据
+	Key() []byte
+
+	// Value 当前遍历位置的Val
+	Value() *data.LogRecordPos
+
+	// Close 关闭迭代器，释放响应资源
+	Close()
 }
