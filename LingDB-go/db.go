@@ -94,7 +94,7 @@ func (db *DB) Delete(key []byte) error {
 	}
 
 	//先检查key在索引里是否存在，如果不存在的话直接返回
-	if pos := db.index.Get(key); pos != nil {
+	if pos := db.index.Get(key); pos == nil {
 		return nil
 	}
 

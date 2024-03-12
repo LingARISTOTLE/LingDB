@@ -15,3 +15,10 @@ const (
 	// ART Adaptive Radix Tree自适应基数树索引
 	ART
 )
+
+var DefaultOptions = Options{
+	DirPath:      "C:\\go-pj\\LingDB\\db_data",
+	DataFileSize: 256 * 1024 * 1024, // 256MB
+	SyncWrites:   false,
+	IndexType:    BTREE,
+}
