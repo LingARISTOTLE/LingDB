@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ type DB struct {
 	olderFiles map[uint32]*data.DataFile //旧的数据文件，只能用于读
 	index      index.Indexer             //内存索引
 	seqNo      uint64                    // 事务序列号，全局递增
+	isMerging  bool                      // 是否正在 merge
 }
 
 // Open 打开db存储引擎实例
@@ -45,8 +47,18 @@ func Open(options Options) (*DB, error) {
 		index:      index.NewIndexer(index.IndexType(options.IndexType)),
 	}
 
+	// 加载 merge 数据目录
+	if err := db.loadMergeFiles(); err != nil {
+		return nil, err
+	}
+
 	//加载数据文件内容
 	if err := db.loadDataFiles(); err != nil {
+		return nil, err
+	}
+
+	// 从 hint 索引文件中加载索引
+	if err := db.loadIndexFromHintFile(); err != nil {
 		return nil, err
 	}
 
@@ -364,6 +376,18 @@ func (db *DB) loadIndexFromDataFiles() error {
 		return nil
 	}
 
+	// 查看是否发生过 merge
+	hasMerge, nonMergeFileId := false, uint32(0)
+	mergeFinFileName := filepath.Join(db.options.DirPath, data.MergeFinishedFileName)
+	if _, err := os.Stat(mergeFinFileName); err == nil {
+		fid, err := db.getNonMergeFileId(db.options.DirPath)
+		if err != nil {
+			return err
+		}
+		hasMerge = true
+		nonMergeFileId = fid
+	}
+
 	updateIndex := func(key []byte, typ data.LogRecordType, pos *data.LogRecordPos) {
 		// 因为按照文件id顺序遍历的，所以如果后续有追加了delete的record，那么需要删除这个索引中的kv
 		var ok bool
@@ -384,6 +408,10 @@ func (db *DB) loadIndexFromDataFiles() error {
 	//遍历所有文件id，处理文件数据
 	for i, fid := range db.fileIds {
 		var fileId = uint32(fid)
+		// 如果比最近未参与 merge 的文件 id 更小，则说明已经从 Hint 文件中加载索引了
+		if hasMerge && fileId < nonMergeFileId {
+			continue
+		}
 		var dataFile *data.DataFile
 		//判断是否是活跃文件
 		if fileId == db.activeFile.FileId {
