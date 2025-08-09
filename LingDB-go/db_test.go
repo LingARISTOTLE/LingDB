@@ -2,9 +2,12 @@ package LingDB_go
 
 import (
 	"LingDB/LingDB-go/utils"
+	"fmt"
 	"github.com/stretchr/testify/assert"
+	"math/rand"
 	"os"
 	"testing"
+	"time"
 )
 
 // 测试完成之后销毁 DB 数据目录
@@ -22,12 +25,39 @@ func destroyDB(db *DB) {
 
 func TestOpen(t *testing.T) {
 	opts := DefaultOptions
-	dir, _ := os.MkdirTemp("", "bitcask-go")
-	opts.DirPath = dir
+	opts.DataFileSize = 64 * 1024 * 1024
+	db, err := Open(opts)
+	//defer destroyDB(db)
+	assert.Nil(t, err)
+	assert.NotNil(t, db)
+}
+
+func Test2(t *testing.T) {
+	if err := os.Rename("../db-data-merge/merge-finished", "../db-data/merge-finished"); err != nil {
+		fmt.Println(err.Error())
+	}
+}
+
+func TestDB_Main(t *testing.T) {
+	opts := DefaultOptions
+	opts.DataFileSize = 64 * 1024 * 1024
 	db, err := Open(opts)
 	defer destroyDB(db)
 	assert.Nil(t, err)
 	assert.NotNil(t, db)
+
+	millisecond := time.Now().Format("2006-01-02 15:04:05.000")
+	fmt.Println(millisecond)
+	for i := 0; i < 1000000; i++ {
+		err := db.Put(utils.GetTestKey(i), utils.RandomValue(128))
+		assert.Nil(t, err)
+	}
+	now := time.Now().Format("2006-01-02 15:04:05.000")
+	fmt.Println(now)
+
+	assert.Equal(t, 2, len(db.olderFiles))
+	err = db.Close()
+	assert.Nil(t, err)
 }
 
 func TestDB_Put(t *testing.T) {
@@ -230,8 +260,8 @@ func TestDB_ListKeys(t *testing.T) {
 
 func TestDB_Fold(t *testing.T) {
 	opts := DefaultOptions
-	dir, _ := os.MkdirTemp("", "bitcask-go-fold")
-	opts.DirPath = dir
+	//dir, _ := os.MkdirTemp("", "bitcask-go-fold")
+	//opts.DirPath = dir
 	db, err := Open(opts)
 	defer destroyDB(db)
 	assert.Nil(t, err)
@@ -257,8 +287,8 @@ func TestDB_Fold(t *testing.T) {
 
 func TestDB_Close(t *testing.T) {
 	opts := DefaultOptions
-	dir, _ := os.MkdirTemp("", "bitcask-go-close")
-	opts.DirPath = dir
+	//dir, _ := os.MkdirTemp("", "bitcask-go-close")
+	//opts.DirPath = dir
 	db, err := Open(opts)
 	defer destroyDB(db)
 	assert.Nil(t, err)
@@ -270,8 +300,8 @@ func TestDB_Close(t *testing.T) {
 
 func TestDB_Sync(t *testing.T) {
 	opts := DefaultOptions
-	dir, _ := os.MkdirTemp("", "bitcask-go-sync")
-	opts.DirPath = dir
+	//dir, _ := os.MkdirTemp("", "bitcask-go-sync")
+	//opts.DirPath = dir
 	db, err := Open(opts)
 	defer destroyDB(db)
 	assert.Nil(t, err)
@@ -282,4 +312,30 @@ func TestDB_Sync(t *testing.T) {
 
 	err = db.Sync()
 	assert.Nil(t, err)
+}
+
+func TestDB_Merge(t *testing.T) {
+	opts := DefaultOptions
+	opts.DataFileSize = 64 * 1024 * 1024
+	db, err := Open(opts)
+	//defer destroyDB(db)
+	assert.Nil(t, err)
+	assert.NotNil(t, db)
+
+	for i := 0; i < 1000000; i++ {
+		err := db.Put(utils.GetTestKey(rand.Intn(1000)+1), utils.RandomValue(128))
+		assert.Nil(t, err)
+	}
+	fmt.Println(len(db.olderFiles))
+	err = db.Sync()
+	assert.Nil(t, err)
+
+	//db.Merge()
+	//db.Sync()
+	db.Close()
+
+	//db, err = Open(opts)
+	//defer destroyDB(db)
+	//assert.Nil(t, err)
+	//assert.NotNil(t, db)
 }

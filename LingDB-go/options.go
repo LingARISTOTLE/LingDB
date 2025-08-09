@@ -29,7 +29,7 @@ const (
 )
 
 var DefaultOptions = Options{
-	DirPath:      "C:\\go-pj\\LingDB\\db_data",
+	DirPath:      "./db-data",
 	DataFileSize: 256 * 1024 * 1024, // 256MB
 	SyncWrites:   false,
 	IndexType:    BTREE,

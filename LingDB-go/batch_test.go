@@ -6,6 +6,28 @@ import (
 	"testing"
 )
 
+func TestDB_WriteBatch0(t *testing.T) {
+	opts := DefaultOptions
+	db, err := Open(opts)
+	//defer destroyDB(db)
+	assert.Nil(t, err)
+	assert.NotNil(t, db)
+
+	// 写数据之后并不提交
+	wb := db.NewWriteBatch(DefaultWriteBatchOptions)
+	err = wb.Put(utils.GetTestKey(1), utils.RandomValue(10))
+	assert.Nil(t, err)
+	err = wb.Delete(utils.GetTestKey(2))
+	assert.Nil(t, err)
+
+	_, err = db.Get(utils.GetTestKey(1))
+	assert.Equal(t, ErrKeyNotFound, err)
+
+	// 正常提交数据
+	err = wb.Commit()
+	assert.Nil(t, err)
+}
+
 func TestDB_WriteBatch1(t *testing.T) {
 	opts := DefaultOptions
 	db, err := Open(opts)

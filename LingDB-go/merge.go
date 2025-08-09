@@ -227,6 +227,7 @@ func (db *DB) getNonMergeFileId(dirPath string) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
+	mergeFinishedFile.Close()
 	return uint32(nonMergeFileId), nil
 }
 
